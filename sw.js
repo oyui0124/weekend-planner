@@ -18,11 +18,15 @@ self.addEventListener("message", e => {
 
 self.addEventListener("notificationclick", e => {
   e.notification.close();
-  const url = e.notification.data?.url || APP_URL;
+  const base = e.notification.data?.url || APP_URL;
+  const url = base + "?reminder=1";
   e.waitUntil(
     clients.matchAll({ type: "window", includeUncontrolled: true }).then(list => {
       for (const c of list) {
-        if (c.url.includes("weekend-planner") && "focus" in c) return c.focus();
+        if (c.url.includes("weekend-planner") && "focus" in c) {
+          c.postMessage({ type: "SHOW_REMINDER" });
+          return c.focus();
+        }
       }
       return clients.openWindow(url);
     })
