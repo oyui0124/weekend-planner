@@ -27,7 +27,6 @@ const GCAL_CLIENT_ID = "386754812709-a18clokvvp2f02t9diimqlfki7qv07lq.apps.googl
 const GCAL_SCOPES = "https://www.googleapis.com/auth/calendar.events";
 const GCAL_API = "https://www.googleapis.com/calendar/v3";
 
-// Google OAuth トークン管理
 let gAccessToken = null;
 function initGoogleAuth() {
   return new Promise((resolve) => {
@@ -61,7 +60,8 @@ async function gcalFetch(path, opts = {}) {
     ...opts,
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...opts.headers },
   });
-  if (!res.ok) throw new Error(`Google API error: ${res.status}`);
+  if (!res.ok && res.status !== 204) throw new Error(`Google API error: ${res.status}`);
+  if (res.status === 204) return {};
   const text = await res.text();
   return text ? JSON.parse(text) : {};
 }
@@ -138,7 +138,6 @@ const fmtDur = v => { const h=Math.floor(v/60),m=v%60; return h===0?`${m}分`:m=
 const NOTIF_SUPPORT = "Notification" in window;
 function getPermissionStatus() { return NOTIF_SUPPORT ? Notification.permission : "unsupported"; }
 
-// Service Worker登録（ページ読み込み時）
 let swReady = null;
 if ("serviceWorker" in navigator) {
   swReady = navigator.serviceWorker.register("./sw.js")
@@ -737,7 +736,6 @@ function App() {
       return { evs, endH: h, endM: m };
     }
 
-    // 1. 固定時間タスクを先に配置
     const fixed = tasks.filter(t => t.fixedTime && t.time).sort((a,b) => a.time.localeCompare(b.time));
     const flex = tasks.filter(t => !t.fixedTime || !t.time);
 
@@ -756,7 +754,6 @@ function App() {
     });
     occupied.sort((a,b) => a.startMins - b.startMins);
 
-    // 2. フレキシブルタスクをカテゴリ順にまとめて配置（重ならないように）
     const catGroups = {};
     flex.forEach(t => {
       if (!catGroups[t.category]) catGroups[t.category] = [];
@@ -801,13 +798,31 @@ function App() {
   }
 
   async function saveToCalendar(){
-    setSaving(true); setError("");
+    setSaving(true); setError(""); setLoading("");
     try {
       const allEvents=[
         ...satEvents.map(e=>({...e,date:fmtISO(sat)})),
         ...sunEvents.map(e=>({...e,date:fmtISO(sun)})),
       ];
-      for (const ev of allEvents) {
+      const total = allEvents.length;
+
+      // 1. 既存イベントを削除（土日の範囲）
+      setLoading("既存の予定を確認中...");
+      const satStr = fmtISO(sat);
+      const monAfter = new Date(sun); monAfter.setDate(monAfter.getDate()+1);
+      const monStr = fmtISO(monAfter);
+      const existing = await gcalFetch(`/calendars/primary/events?timeMin=${satStr}T00:00:00%2B09:00&timeMax=${monStr}T00:00:00%2B09:00&maxResults=200&singleEvents=true`);
+      if (existing.items && existing.items.length > 0) {
+        for (let i = 0; i < existing.items.length; i++) {
+          setLoading(`既存の予定を削除中... (${i+1}/${existing.items.length})`);
+          await gcalFetch(`/calendars/primary/events/${existing.items[i].id}`, { method: "DELETE" });
+        }
+      }
+
+      // 2. 新しいイベントを登録
+      for (let i = 0; i < allEvents.length; i++) {
+        setLoading(`カレンダーに登録中... (${i+1}/${total})`);
+        const ev = allEvents[i];
         await gcalFetch("/calendars/primary/events", {
           method: "POST",
           body: JSON.stringify({
@@ -819,7 +834,7 @@ function App() {
       }
       setSaved(true); setWeekTasks([]);
     } catch(e){setError("保存エラー: "+e.message);}
-    setSaving(false);
+    setSaving(false); setLoading("");
   }
 
   const SECTIONS=[
@@ -854,8 +869,8 @@ function App() {
                   style={{backgroundColor:"#f0fdf4",border:"1px solid #bbf7d0",color:"#15803d"}}>✓ 登録済み</div>
               : <button onClick={saveToCalendar} disabled={saving}
                   className="text-sm px-4 py-2 rounded-xl font-semibold disabled:opacity-40"
-                  style={{backgroundColor:"#5a4fcf",color:"white"}}>
-                  {saving?"登録中...":"📅 カレンダーに登録"}
+                  style={{backgroundColor:saving?"#8b7fdf":"#5a4fcf",color:"white",minWidth:180}}>
+                  {saving?(loading||"登録中..."):"📅 カレンダーに登録"}
                 </button>
             }
           </div>
