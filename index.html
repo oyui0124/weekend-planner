@@ -96,21 +96,19 @@ const fmtDur = v => { const h=Math.floor(v/60),m=v%60; return h===0?`${m}分`:m=
 // ── Notification ──────────────────────────────────────────────
 const NOTIF_SUPPORT = "Notification" in window;
 function getPermissionStatus() { return NOTIF_SUPPORT ? Notification.permission : "unsupported"; }
+
+// Service Worker登録（ページ読み込み時）
+let swReady = null;
+if ("serviceWorker" in navigator) {
+  swReady = navigator.serviceWorker.register("./sw.js")
+    .then(reg => { console.log("SW登録成功:", reg.scope); return reg; })
+    .catch(e => { console.warn("SW登録失敗:", e); return null; });
+}
+
 async function requestPermission() {
   if (!NOTIF_SUPPORT) return "unsupported";
   if (Notification.permission !== "default") return Notification.permission;
-  const result = await Notification.requestPermission();
-  // Service Worker登録
-  if (result === "granted" && "serviceWorker" in navigator) {
-    try {
-      await navigator.serviceWorker.register("./sw.js");
-    } catch(e) { console.warn("SW登録失敗:", e); }
-  }
-  return result;
-}
-// ページ読み込み時にもSW登録を試みる
-if ("serviceWorker" in navigator && Notification.permission === "granted") {
-  navigator.serviceWorker.register("./sw.js").catch(e => console.warn("SW:", e));
+  return await Notification.requestPermission();
 }
 function showNotification(title, body, tag) {
   if (!NOTIF_SUPPORT || Notification.permission !== "granted") return;

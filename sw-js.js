@@ -1,38 +1,30 @@
-const APP_URL = "https://oyui0124.github.io/weekend-planner/index.html";
+const APP_URL = "/weekend-planner/";
 
-self.addEventListener("push", e => {
-  const data = e.data ? e.data.json() : {};
-  e.waitUntil(
-    self.registration.showNotification(data.title || "🗓️ 週末プランナー", {
-      body: data.body || "今週末のスケジュールを組む時間です！",
-      icon: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14/assets/svg/1f4c5.svg",
-      tag: data.tag || "wplanner",
-      requireInteraction: true,
-    })
-  );
+self.addEventListener("install", e => { self.skipWaiting(); });
+self.addEventListener("activate", e => { e.waitUntil(clients.claim()); });
+
+// postMessageで通知を受け取って表示
+self.addEventListener("message", e => {
+  if (e.data?.type === "SHOW_NOTIF") {
+    e.waitUntil(
+      self.registration.showNotification(e.data.title || "🗓️ 週末プランナー", {
+        body: e.data.body || "通知テストです",
+        tag: e.data.tag || "wplanner",
+        icon: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14/assets/svg/1f4c5.svg",
+      })
+    );
+  }
 });
 
-// 通知をクリックしたらアプリを開く
+// 通知クリックでアプリを開く
 self.addEventListener("notificationclick", e => {
   e.notification.close();
   e.waitUntil(
-    clients.matchAll({ type: "window", includeUncontrolled: true }).then(list => {
-      for (const client of list) {
-        if (client.url === APP_URL && "focus" in client) return client.focus();
+    clients.matchAll({ type:"window", includeUncontrolled:true }).then(list => {
+      for (const c of list) {
+        if (c.url.includes("weekend-planner") && "focus" in c) return c.focus();
       }
-      if (clients.openWindow) return clients.openWindow(APP_URL);
+      return clients.openWindow(APP_URL);
     })
   );
-});
-
-// Service Workerからローカルで通知を出す（postMessage経由）
-self.addEventListener("message", e => {
-  if (e.data?.type === "SHOW_NOTIF") {
-    self.registration.showNotification(e.data.title, {
-      body: e.data.body,
-      icon: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14/assets/svg/1f4c5.svg",
-      tag: e.data.tag || "wplanner",
-      requireInteraction: false,
-    });
-  }
 });
