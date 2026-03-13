@@ -173,7 +173,7 @@ function fireTestNotification() {
   }
   showNotification("週末プランナー", "通知テスト完了 ✔︎", "wplanner-test");
 }
-function scheduleFridayNotif(setNextFridayState) {
+function scheduleFridayNotif(setNextFridayState, setShowReminder) {
   const now = new Date();
   const next = new Date(now);
   const daysToFri = (now.getDay()===5 && now.getHours()<18) ? 0 : (5-now.getDay()+7)%7||7;
@@ -183,6 +183,7 @@ function scheduleFridayNotif(setNextFridayState) {
     showNotification("週末プランナー",
       `${fmt(sat)}〜${fmt(sun)} のプランを立てよう`,
       "wplanner-friday");
+    if(setShowReminder) setShowReminder(true);
   }, next.getTime()-now.getTime());
 }
 
@@ -675,6 +676,7 @@ function App() {
   const [permStatus,  setPermStatus]  = useState(getPermissionStatus);
   const [nextFriday,  setNextFriday]  = useState(null);
   const [isFriday18,  setIsFriday18]  = useState(false);
+  const [showReminder, setShowReminder] = useState(false);
   const [step,        setStep]        = useState("input");
   const [satEvents,   setSatEvents]   = useState([]);
   const [sunEvents,   setSunEvents]   = useState([]);
@@ -697,7 +699,7 @@ function App() {
 
   useEffect(()=>{
     if(timerHandle.current) clearTimeout(timerHandle.current);
-    if(permStatus==="granted"&&notifEnabled) timerHandle.current=scheduleFridayNotif(setNextFriday);
+    if(permStatus==="granted"&&notifEnabled) timerHandle.current=scheduleFridayNotif(setNextFriday, setShowReminder);
     else setNextFriday(null);
     return ()=>{if(timerHandle.current)clearTimeout(timerHandle.current);};
   },[permStatus,notifEnabled]);
@@ -863,6 +865,20 @@ function App() {
     {key:"fixed",label:"📌 固定タスク",  sub:"毎週繰り越して使えます",tasks:fixedTasks,setTasks:setFixedTasks},
     {key:"week", label:"✨ 今週のタスク",sub:"来週金曜に自動リセット", tasks:weekTasks, setTasks:setWeekTasks},
   ];
+  if(showReminder) return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{backgroundColor:"#5a4fcf"}}>
+      <div className="text-center px-8">
+        <div className="text-7xl mb-6">📅</div>
+        <p className="text-white text-2xl font-bold mb-3">週末のプランを立てよう</p>
+        <p className="text-white text-base opacity-80 mb-8">{fmt(sat)}（土）〜 {fmt(sun)}（日）</p>
+        <button onClick={()=>setShowReminder(false)}
+          className="px-8 py-3 rounded-full text-lg font-bold"
+          style={{backgroundColor:"white",color:"#5a4fcf"}}>
+          プランを立てる
+        </button>
+      </div>
+    </div>
+  );
 
   if(step==="loading") return (
     <div className="min-h-screen flex items-center justify-center" style={{backgroundColor:"#f5f5fa"}}>
