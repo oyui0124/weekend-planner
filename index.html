@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<link rel="manifest" href="manifest.json"/>
 <title>週末プランナー</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -170,7 +171,7 @@ function fireTestNotification() {
     alert("通知権限がありません: " + Notification.permission);
     return;
   }
-  showNotification("🗓️ 週末プランナー", "テスト通知です！正常に動作しています。", "wplanner-test");
+  showNotification("週末プランナー", "通知テスト完了 ✔︎", "wplanner-test");
 }
 function scheduleFridayNotif(setNextFridayState) {
   const now = new Date();
@@ -179,8 +180,8 @@ function scheduleFridayNotif(setNextFridayState) {
   next.setDate(now.getDate()+daysToFri); next.setHours(18,0,0,0);
   setNextFridayState(next);
   return setTimeout(()=>{
-    showNotification("🗓️ 週末プランナー",
-      `今週末（${fmt(sat)}〜${fmt(sun)}）のスケジュールを組む時間です！`,
+    showNotification("週末プランナー",
+      `${fmt(sat)}〜${fmt(sun)} のプランを立てよう`,
       "wplanner-friday");
   }, next.getTime()-now.getTime());
 }
