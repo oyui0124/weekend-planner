@@ -113,12 +113,8 @@ async function requestPermission() {
 async function showNotification(title, body, tag) {
   if (!NOTIF_SUPPORT || Notification.permission !== "granted") return;
   const reg = await navigator.serviceWorker?.ready;
-  if (reg) {
-    reg.showNotification(title, {
-      body, tag,
-      icon: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14/assets/svg/1f4c5.svg",
-      data: { url: "/weekend-planner/" }
-    });
+  if (reg && reg.active) {
+    reg.active.postMessage({ type:"SHOW_NOTIF", title, body, tag });
   } else {
     try { new Notification(title, { body, tag }); } catch(e) {}
   }
@@ -931,4 +927,3 @@ ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
 </body>
 </html>
-
