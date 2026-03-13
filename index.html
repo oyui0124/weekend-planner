@@ -708,6 +708,15 @@ function App() {
     const check=()=>{const n=new Date();setIsFriday18(n.getDay()===5&&n.getHours()===18);};
     check(); const id=setInterval(check,60000); return ()=>clearInterval(id);
   },[]);
+  useEffect(()=>{
+    if(window.location.search.includes("reminder=1")){
+      setShowReminder(true);
+      window.history.replaceState({},"",window.location.pathname);
+    }
+    const handler=(e)=>{if(e.data?.type==="SHOW_REMINDER")setShowReminder(true);};
+    navigator.serviceWorker?.addEventListener("message",handler);
+    return ()=>navigator.serviceWorker?.removeEventListener("message",handler);
+  },[]);
 
   async function handleRequestPerm(){setPermStatus(await requestPermission());}
   function handleTestNotif(){ fireTestNotification(); setShowReminder(true); }
