@@ -809,6 +809,11 @@ function App() {
   async function saveToCalendar(){
     setSaving(true); setError(""); setLoading("");
     try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const off = new Date().getTimezoneOffset();
+      const tzSign = off <= 0 ? "%2B" : "-";
+      const tzStr = `${tzSign}${String(Math.floor(Math.abs(off)/60)).padStart(2,"0")}:${String(Math.abs(off)%60).padStart(2,"0")}`;
+
       const allEvents=[
         ...satEvents.map(e=>({...e,date:fmtISO(sat)})),
         ...sunEvents.map(e=>({...e,date:fmtISO(sun)})),
@@ -820,7 +825,7 @@ function App() {
       const satStr = fmtISO(sat);
       const monAfter = new Date(sun); monAfter.setDate(monAfter.getDate()+1);
       const monStr = fmtISO(monAfter);
-      const existing = await gcalFetch(`/calendars/primary/events?timeMin=${satStr}T00:00:00%2B09:00&timeMax=${monStr}T00:00:00%2B09:00&maxResults=200&singleEvents=true`);
+      const existing = await gcalFetch(`/calendars/primary/events?timeMin=${satStr}T00:00:00${tzStr}&timeMax=${monStr}T00:00:00${tzStr}&maxResults=200&singleEvents=true`);
       if (existing.items && existing.items.length > 0) {
         for (let i = 0; i < existing.items.length; i++) {
           setLoading(`既存の予定を削除中... (${i+1}/${existing.items.length})`);
@@ -836,8 +841,8 @@ function App() {
           method: "POST",
           body: JSON.stringify({
             summary: ev.title,
-            start: { dateTime: `${ev.date}T${ev.time}:00`, timeZone: "Asia/Tokyo" },
-            end:   { dateTime: `${ev.date}T${ev.end_time}:00`, timeZone: "Asia/Tokyo" },
+            start: { dateTime: `${ev.date}T${ev.time}:00`, timeZone: tz },
+            end:   { dateTime: `${ev.date}T${ev.end_time}:00`, timeZone: tz },
           }),
         });
       }
@@ -852,6 +857,7 @@ function App() {
     } catch(e){setError("保存エラー: "+e.message);}
     setSaving(false); setLoading("");
   }
+
 
   const SECTIONS=[
     {key:"fixed",label:"📌 固定タスク",  sub:"毎週繰り越して使えます",tasks:fixedTasks,setTasks:setFixedTasks},
