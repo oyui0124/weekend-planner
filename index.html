@@ -813,7 +813,6 @@ function App() {
       setLoading("カレンダー設定を確認中...");
       const calInfo = await gcalFetch("/calendars/primary");
       const tz = calInfo.timeZone || "Asia/Tokyo";
-      alert("calInfo: " + JSON.stringify(calInfo));
 
       const allEvents=[
         ...satEvents.map(e=>({...e,date:fmtISO(sat)})),
@@ -826,7 +825,7 @@ function App() {
       const satStr = fmtISO(sat);
       const monAfter = new Date(sun); monAfter.setDate(monAfter.getDate()+1);
       const monStr = fmtISO(monAfter);
-      const existing = await gcalFetch(`/calendars/primary/events?timeMin=${satStr}T00:00:00&timeMax=${monStr}T00:00:00&timeZone=${encodeURIComponent(tz)}&maxResults=200&singleEvents=true`);
+      const existing = await gcalFetch(`/calendars/primary/events?timeMin=${satStr}T00:00:00Z&timeMax=${monStr}T00:00:00Z&timeZone=${encodeURIComponent(tz)}&maxResults=200&singleEvents=true`);
       if (existing.items && existing.items.length > 0) {
         for (let i = 0; i < existing.items.length; i++) {
           setLoading(`既存の予定を削除中... (${i+1}/${existing.items.length})`);
