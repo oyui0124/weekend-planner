@@ -809,10 +809,10 @@ function App() {
   async function saveToCalendar(){
     setSaving(true); setError(""); setLoading("");
     try {
-      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      const off = new Date().getTimezoneOffset();
-      const tzSign = off <= 0 ? "%2B" : "-";
-      const tzStr = `${tzSign}${String(Math.floor(Math.abs(off)/60)).padStart(2,"0")}:${String(Math.abs(off)%60).padStart(2,"0")}`;
+      // Googleカレンダーのタイムゾーンを取得
+      setLoading("カレンダー設定を確認中...");
+      const calInfo = await gcalFetch("/calendars/primary");
+      const tz = calInfo.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
 
       const allEvents=[
         ...satEvents.map(e=>({...e,date:fmtISO(sat)})),
@@ -825,7 +825,7 @@ function App() {
       const satStr = fmtISO(sat);
       const monAfter = new Date(sun); monAfter.setDate(monAfter.getDate()+1);
       const monStr = fmtISO(monAfter);
-      const existing = await gcalFetch(`/calendars/primary/events?timeMin=${satStr}T00:00:00${tzStr}&timeMax=${monStr}T00:00:00${tzStr}&maxResults=200&singleEvents=true`);
+      const existing = await gcalFetch(`/calendars/primary/events?timeMin=${satStr}T00:00:00&timeMax=${monStr}T00:00:00&timeZone=${encodeURIComponent(tz)}&maxResults=200&singleEvents=true`);
       if (existing.items && existing.items.length > 0) {
         for (let i = 0; i < existing.items.length; i++) {
           setLoading(`既存の予定を削除中... (${i+1}/${existing.items.length})`);
@@ -857,7 +857,6 @@ function App() {
     } catch(e){setError("保存エラー: "+e.message);}
     setSaving(false); setLoading("");
   }
-
 
   const SECTIONS=[
     {key:"fixed",label:"📌 固定タスク",  sub:"毎週繰り越して使えます",tasks:fixedTasks,setTasks:setFixedTasks},
