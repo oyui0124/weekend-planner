@@ -710,6 +710,7 @@ function App() {
   },[]);
 
   async function handleRequestPerm(){setPermStatus(await requestPermission());}
+  function handleTestNotif(){ fireTestNotification(); setShowReminder(true); }
 
   const onTimeChange=useCallback((day,id,newTime,newEnd)=>{
     (day==="sat"?setSatEvents:setSunEvents)(prev=>prev.map(e=>e.id===id?{...e,time:newTime,end_time:newEnd}:e));
@@ -1013,7 +1014,7 @@ function App() {
             </div>
           )}
           <NotificationPanel permStatus={permStatus} onRequestPerm={handleRequestPerm}
-            onTest={fireTestNotification} notifEnabled={notifEnabled}
+            onTest={handleTestNotif} notifEnabled={notifEnabled}
             setNotifEnabled={setNotifEnabled} nextFriday={nextFriday}/>
           <StartTimeSettings startTimes={startTimes} onChange={setStartTimes}/>
           {fixedTasks.length===0&&weekTasks.length===0&&(
