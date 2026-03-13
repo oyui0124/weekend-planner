@@ -7,7 +7,7 @@ self.addEventListener("message", e => {
   if (e.data?.type === "SHOW_NOTIF") {
     e.waitUntil(
       self.registration.showNotification(e.data.title || "🗓️ 週末プランナー", {
-        body: e.data.body || "通知テストです",
+        body: e.data.body || "通知テスト",
         tag: e.data.tag || "wplanner",
         icon: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14/assets/svg/1f4c5.svg",
         data: { url: APP_URL }
