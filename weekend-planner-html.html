@@ -101,9 +101,26 @@ async function requestPermission() {
   if (Notification.permission !== "default") return Notification.permission;
   return await Notification.requestPermission();
 }
-function fireTestNotification() {
+function showNotification(title, body, tag) {
   if (!NOTIF_SUPPORT || Notification.permission !== "granted") return;
-  new Notification("🗓️ 週末プランナー", { body:"金曜18:00リマインダーのテストです！", tag:"wplanner-test" });
+  // Service Worker経由で通知（GitHub Pagesでも確実に動く）
+  if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+    navigator.serviceWorker.controller.postMessage({ type:"SHOW_NOTIF", title, body, tag });
+  } else {
+    // フォールバック：直接Notification
+    try { new Notification(title, { body, tag, icon:"https://cdn.jsdelivr.net/gh/twitter/twemoji@14/assets/svg/1f4c5.svg" }); }
+    catch(e) { console.warn("通知エラー:", e); }
+  }
+}
+function fireTestNotification() {
+  if (!NOTIF_SUPPORT || Notification.permission !== "granted") {
+    alert("通知権限がありません: " + Notification.permission);
+    return;
+  }
+  showNotification("🗓️ 週末プランナー", "テスト通知です！正常に動作しています。", "wplanner-test");
+  // 直接も試みる
+  try { new Notification("🗓️ 週末プランナー", { body:"テスト通知です！", tag:"wplanner-test2" }); }
+  catch(e) { console.warn(e); }
 }
 function scheduleFridayNotif(setNextFridayState) {
   const now = new Date();
@@ -112,12 +129,9 @@ function scheduleFridayNotif(setNextFridayState) {
   next.setDate(now.getDate()+daysToFri); next.setHours(18,0,0,0);
   setNextFridayState(next);
   return setTimeout(()=>{
-    if (Notification.permission==="granted") {
-      new Notification("🗓️ 週末プランナー", {
-        body:`今週末（${fmt(sat)}〜${fmt(sun)}）のスケジュールを組む時間です！`,
-        tag:"wplanner-friday", requireInteraction:true,
-      });
-    }
+    showNotification("🗓️ 週末プランナー",
+      `今週末（${fmt(sat)}〜${fmt(sun)}）のスケジュールを組む時間です！`,
+      "wplanner-friday");
   }, next.getTime()-now.getTime());
 }
 
