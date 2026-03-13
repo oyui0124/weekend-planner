@@ -1,0 +1,935 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>週末プランナー</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5fa; }
+  input[type=range] { -webkit-appearance: none; appearance: none; }
+  input[type=time]::-webkit-calendar-picker-indicator { opacity: 0.5; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ⚙️  設定（ここだけ変えればOK）
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const GCAL_MCP_URL = "https://gcal.mcp.claude.com/mcp";
+// Anthropic APIキーは不要です（claude.aiのセッションを使用）
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+const { useState, useRef, useEffect, useCallback } = React;
+
+const today = new Date();
+function getNextWeekend() {
+  const d = new Date(today);
+  const daysToSat = (6 - d.getDay() + 7) % 7 || 7;
+  const sat = new Date(d); sat.setDate(d.getDate() + daysToSat);
+  const sun = new Date(sat); sun.setDate(sat.getDate() + 1);
+  return { sat, sun };
+}
+const { sat, sun } = getNextWeekend();
+const fmt = d => d.toLocaleDateString("ja-JP", { month: "long", day: "numeric", weekday: "short" });
+const fmtISO = d => d.toISOString().split("T")[0];
+
+const loadJSON = (k, fb) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fb; } catch { return fb; } };
+const saveJSON = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+
+const SK = {
+  fixedTasks: "wplanner_fixed_tasks",
+  weekTasks:  "wplanner_week_tasks",
+  weekKey:    "wplanner_week_key",
+  categories: "wplanner_categories",
+  notif:      "wplanner_notif_enabled",
+  startTimes: "wplanner_start_times",
+};
+
+const DEFAULT_CATS = [
+  { id:"chores",   label:"家事・用事", emoji:"🏠", bg:"#fff7ed", text:"#c2410c", border:"#fed7aa" },
+  { id:"hobby",    label:"趣味",       emoji:"🎨", bg:"#faf5ff", text:"#7e22ce", border:"#e9d5ff" },
+  { id:"exercise", label:"運動",       emoji:"🏃", bg:"#f0fdf4", text:"#15803d", border:"#bbf7d0" },
+  { id:"study",    label:"勉強",       emoji:"📚", bg:"#eff6ff", text:"#1d4ed8", border:"#bfdbfe" },
+  { id:"free",     label:"自由時間",   emoji:"☕", bg:"#f9fafb", text:"#4b5563", border:"#e5e7eb" },
+];
+const DEFAULT_FIXED = [
+  { id:"f1", title:"掃除・片付け", category:"chores",   duration:60, day:"both", fixedTime:false, time:"", bufferBefore:[], bufferAfter:[] },
+  { id:"f2", title:"買い物",       category:"chores",   duration:60, day:"sat",  fixedTime:false, time:"", bufferBefore:[], bufferAfter:[] },
+  { id:"f3", title:"運動",         category:"exercise", duration:60, day:"both", fixedTime:false, time:"", bufferBefore:[], bufferAfter:[{label:"シャワー", mins:30}] },
+];
+const DAY_OPTIONS = [
+  { value:"both", short:"土日両方" },
+  { value:"sat",  short:"土曜だけ" },
+  { value:"sun",  short:"日曜だけ" },
+];
+const dayMap = Object.fromEntries(DAY_OPTIONS.map(d => [d.value, d]));
+const TIME_SLOTS = Array.from({ length:32 }, (_, i) => {
+  const h = Math.floor(i/2)+7, m = i%2===0?"00":"30";
+  return `${String(h).padStart(2,"0")}:${m}`;
+});
+const EMOJI_OPT = ["🏠","🎨","🏃","📚","☕","🎵","🍳","🛒","💪","🧘","✈️","📷","🎮","🐕","🌿","💊","🧹","🚗","👥","💼"];
+const COLOR_OPT = [
+  { bg:"#fff7ed", text:"#c2410c", border:"#fed7aa", label:"オレンジ" },
+  { bg:"#faf5ff", text:"#7e22ce", border:"#e9d5ff", label:"パープル" },
+  { bg:"#f0fdf4", text:"#15803d", border:"#bbf7d0", label:"グリーン" },
+  { bg:"#eff6ff", text:"#1d4ed8", border:"#bfdbfe", label:"ブルー" },
+  { bg:"#fdf2f8", text:"#9d174d", border:"#fbcfe8", label:"ピンク" },
+  { bg:"#fefce8", text:"#92400e", border:"#fde68a", label:"イエロー" },
+  { bg:"#f0f9ff", text:"#0369a1", border:"#bae6fd", label:"スカイ" },
+  { bg:"#f9fafb", text:"#374151", border:"#e5e7eb", label:"グレー" },
+];
+const HOURS = Array.from({ length:16 }, (_, i) => i+7);
+const SLOT_H = 52;
+const toSlot = t => { const [h,m] = t.split(":").map(Number); return (h-7)*2+(m>=30?1:0); };
+const slotToTime = s => { const h=Math.floor(s/2)+7; return `${String(h).padStart(2,"0")}:${s%2?"30":"00"}`; };
+let eid = 0;
+const mkId = () => `e${++eid}_${Date.now()}`;
+const fmtDur = v => { const h=Math.floor(v/60),m=v%60; return h===0?`${m}分`:m===0?`${h}時間`:`${h}時間${m}分`; };
+
+// ── Notification ──────────────────────────────────────────────
+const NOTIF_SUPPORT = "Notification" in window;
+function getPermissionStatus() { return NOTIF_SUPPORT ? Notification.permission : "unsupported"; }
+
+// Service Worker登録（ページ読み込み時）
+let swReady = null;
+if ("serviceWorker" in navigator) {
+  swReady = navigator.serviceWorker.register("./sw.js")
+    .then(reg => { console.log("SW登録成功:", reg.scope); return reg; })
+    .catch(e => { console.warn("SW登録失敗:", e); return null; });
+}
+
+async function requestPermission() {
+  if (!NOTIF_SUPPORT) return "unsupported";
+  if (Notification.permission !== "default") return Notification.permission;
+  return await Notification.requestPermission();
+}
+async function showNotification(title, body, tag) {
+  if (!NOTIF_SUPPORT || Notification.permission !== "granted") return;
+  try {
+    const reg = await (swReady || navigator.serviceWorker.ready);
+    if (reg) {
+      reg.showNotification(title, { body, tag: tag||"wplanner",
+        icon:"https://cdn.jsdelivr.net/gh/twitter/twemoji@14/assets/svg/1f4c5.svg" });
+    } else {
+      new Notification(title, { body, tag: tag||"wplanner" });
+    }
+  } catch(e) {
+    console.warn("通知エラー:", e);
+    try { new Notification(title, { body }); } catch(e2) { console.warn(e2); }
+  }
+}
+function fireTestNotification() {
+  if (!NOTIF_SUPPORT || Notification.permission !== "granted") {
+    alert("通知権限: " + Notification.permission);
+    return;
+  }
+  showNotification("🗓️ 週末プランナー", "テスト通知です！タップするとアプリが開きます。", "wplanner-test");
+}
+function scheduleFridayNotif(setNextFridayState) {
+  const now = new Date();
+  const next = new Date(now);
+  const daysToFri = (now.getDay()===5 && now.getHours()<18) ? 0 : (5-now.getDay()+7)%7||7;
+  next.setDate(now.getDate()+daysToFri); next.setHours(18,0,0,0);
+  setNextFridayState(next);
+  return setTimeout(()=>{
+    showNotification("🗓️ 週末プランナー",
+      `今週末（${fmt(sat)}〜${fmt(sun)}）のスケジュールを組む時間です！`,
+      "wplanner-friday");
+  }, next.getTime()-now.getTime());
+}
+
+const hp = s => ({ onMouseEnter:()=>s(true), onMouseLeave:()=>s(false) });
+
+function HovBtn({ onClick, active, activeBg, activeBorder, activeText, children, className="", disabled=false }) {
+  const [h,setH] = useState(false);
+  return (
+    <button onClick={onClick} disabled={disabled} {...hp(setH)}
+      style={{ backgroundColor:active?activeBg||"#1a1a2e":h?"#f0f0f5":"transparent",
+        borderColor:active?activeBorder||"#1a1a2e":"#e2e2e8",
+        color:active?activeText||"#fff":"#6b6b80", opacity:disabled?0.4:1 }}
+      className={`py-2.5 rounded-xl text-sm border font-medium transition-all duration-150 ${className}`}>
+      {children}
+    </button>
+  );
+}
+
+function DurationSlider({ value, onChange }) {
+  const min=15,max=480,step=15, pct=((value-min)/(max-min))*100;
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-sm" style={{color:"#9898a8"}}>所要時間</span>
+        <span className="text-sm font-bold" style={{color:"#5a4fcf"}}>{fmtDur(value)}</span>
+      </div>
+      <div className="relative h-6 flex items-center">
+        <div className="absolute w-full h-1.5 rounded-full" style={{backgroundColor:"#e8e8f0"}}/>
+        <div className="absolute h-1.5 rounded-full" style={{width:`${pct}%`,backgroundColor:"#5a4fcf"}}/>
+        <input type="range" min={min} max={max} step={step} value={value}
+          onChange={e=>onChange(Number(e.target.value))}
+          className="absolute w-full opacity-0 cursor-pointer h-6" style={{zIndex:2}}/>
+        <div className="absolute w-5 h-5 rounded-full shadow-md pointer-events-none"
+          style={{left:`calc(${pct}% - 10px)`,backgroundColor:"white",border:"2px solid #5a4fcf"}}/>
+      </div>
+    </div>
+  );
+}
+
+function BufferEditor({ label, buffers, onChange }) {
+  const [adding,setAdding]=useState(false);
+  const [newLabel,setNewLabel]=useState("");
+  const [newMins,setNewMins]=useState(30);
+  const QUICK=[{label:"移動",mins:30},{label:"メイク",mins:45},{label:"シャワー",mins:30},{label:"準備",mins:30},{label:"移動（近め）",mins:15}];
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-medium" style={{color:"#9898a8"}}>{label}</span>
+        {buffers.length>0&&<span className="text-xs font-semibold" style={{color:"#5a4fcf"}}>計{buffers.reduce((s,b)=>s+b.mins,0)}分</span>}
+      </div>
+      {buffers.length>0&&(
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {buffers.map((b,i)=>(
+            <span key={i} className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium"
+              style={{backgroundColor:"#f0eeff",color:"#5a4fcf",border:"1px solid #ddd6fe"}}>
+              {b.label}（{b.mins}分）
+              <button onClick={()=>onChange(buffers.filter((_,j)=>j!==i))} className="ml-0.5 opacity-50 hover:opacity-100 text-xs">✕</button>
+            </span>
+          ))}
+        </div>
+      )}
+      {!adding&&(
+        <div className="flex flex-wrap gap-1.5">
+          {QUICK.filter(q=>!buffers.find(b=>b.label===q.label)).map((q,i)=>(
+            <button key={i} onClick={()=>onChange([...buffers,q])}
+              className="px-2.5 py-1 rounded-lg text-xs border transition"
+              style={{color:"#9898a8",borderColor:"#e2e2e8",backgroundColor:"transparent"}}>＋{q.label}</button>
+          ))}
+          <button onClick={()=>setAdding(true)} className="px-2.5 py-1 rounded-lg text-xs border"
+            style={{color:"#9898a8",borderColor:"#e2e2e8",backgroundColor:"transparent"}}>＋カスタム</button>
+        </div>
+      )}
+      {adding&&(
+        <div className="flex gap-2 items-center mt-1">
+          <input value={newLabel} onChange={e=>setNewLabel(e.target.value)} placeholder="名前"
+            className="flex-1 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none" style={{border:"1px solid #e2e2e8",minWidth:0}}/>
+          <input type="number" value={newMins} onChange={e=>setNewMins(Number(e.target.value))} min={5} max={120} step={5}
+            className="w-16 rounded-lg px-2 py-1.5 text-xs focus:outline-none text-center" style={{border:"1px solid #e2e2e8"}}/>
+          <span className="text-xs" style={{color:"#9898a8"}}>分</span>
+          <button onClick={()=>{if(newLabel&&newMins>0){onChange([...buffers,{label:newLabel,mins:newMins}]);setNewLabel("");setNewMins(30);}setAdding(false);}}
+            className="text-xs font-bold px-2.5 py-1.5 rounded-lg" style={{backgroundColor:"#5a4fcf",color:"white"}}>追加</button>
+          <button onClick={()=>setAdding(false)} className="text-xs px-2 py-1.5 rounded-lg" style={{color:"#9898a8"}}>✕</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TaskModal({ initial, onSave, onClose, title, categories }) {
+  const dflt={title:"",category:categories[0]?.id||"chores",duration:60,day:"both",fixedTime:false,time:"",bufferBefore:[],bufferAfter:[]};
+  const [t,setT]=useState(initial?{...dflt,...initial,bufferBefore:initial.bufferBefore||[],bufferAfter:initial.bufferAfter||[]}:dflt);
+  const [showBuf,setShowBuf]=useState(!!(initial?.bufferBefore?.length||initial?.bufferAfter?.length));
+  return (
+    <div className="fixed inset-0 flex items-center justify-center z-50 p-4 overflow-y-auto"
+      style={{backgroundColor:"rgba(0,0,0,0.4)",backdropFilter:"blur(4px)"}}>
+      <div className="rounded-2xl p-6 w-full max-w-sm shadow-2xl my-4 bg-white" style={{border:"1px solid #e8e8f0"}}>
+        <h3 className="font-bold text-gray-800 text-base mb-5">{title}</h3>
+        <div className="space-y-5">
+          <div>
+            <label className="block text-sm mb-2" style={{color:"#9898a8"}}>タスク名</label>
+            <input className="w-full rounded-xl px-4 py-3 text-sm focus:outline-none"
+              style={{border:"1px solid #e2e2e8",backgroundColor:"#fafafa"}}
+              value={t.title} onChange={e=>setT(p=>({...p,title:e.target.value}))} placeholder="例：ジムに行く"/>
+          </div>
+          <div>
+            <label className="block text-sm mb-2" style={{color:"#9898a8"}}>いつやる？</label>
+            <div className="flex gap-2">
+              {DAY_OPTIONS.map(d=>(
+                <HovBtn key={d.value} onClick={()=>setT(p=>({...p,day:d.value}))} active={t.day===d.value} className="flex-1">{d.short}</HovBtn>
+              ))}
+            </div>
+          </div>
+          <DurationSlider value={t.duration} onChange={v=>setT(p=>({...p,duration:v}))}/>
+          <div>
+            <label className="block text-sm mb-2" style={{color:"#9898a8"}}>カテゴリ</label>
+            <div className="grid grid-cols-3 gap-2">
+              {categories.map(c=>(
+                <HovBtn key={c.id} onClick={()=>setT(p=>({...p,category:c.id}))} active={t.category===c.id}
+                  activeBg={c.bg} activeBorder={c.border} activeText={c.text}>{c.emoji} {c.label}</HovBtn>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-sm" style={{color:"#9898a8"}}>開始時間を固定する</label>
+              <button onClick={()=>setT(p=>({...p,fixedTime:!p.fixedTime,time:""}))}
+                style={{width:48,height:28,borderRadius:14,padding:3,backgroundColor:t.fixedTime?"#5a4fcf":"#d1d5db",
+                  display:"flex",alignItems:"center",justifyContent:t.fixedTime?"flex-end":"flex-start",border:"none",cursor:"pointer"}}>
+                <span style={{width:22,height:22,borderRadius:"50%",backgroundColor:"white",boxShadow:"0 1px 3px rgba(0,0,0,0.2)",display:"block"}}/>
+              </button>
+            </div>
+            {t.fixedTime&&(
+              <select className="w-full rounded-xl px-4 py-3 text-sm focus:outline-none"
+                style={{border:"1px solid #e2e2e8",backgroundColor:"#fafafa"}}
+                value={t.time} onChange={e=>setT(p=>({...p,time:e.target.value}))}>
+                <option value="">開始時間を選ぶ</option>
+                {TIME_SLOTS.map(s=><option key={s} value={s}>{s}</option>)}
+              </select>
+            )}
+          </div>
+          <div className="rounded-xl overflow-hidden" style={{border:"1px solid #e8e8f0"}}>
+            <button onClick={()=>setShowBuf(v=>!v)}
+              className="w-full flex items-center justify-between px-4 py-3 text-left"
+              style={{backgroundColor:showBuf?"#f8f7ff":"white"}}>
+              <span className="text-sm font-medium" style={{color:"#1a1a2e"}}>前後の準備・移動時間</span>
+              <span className="text-xs" style={{color:"#9898a8"}}>{showBuf?"▲":"▼"}</span>
+            </button>
+            {showBuf&&(
+              <div className="px-4 pb-4 pt-3 space-y-4" style={{backgroundColor:"#fafafa",borderTop:"1px solid #f0f0f5"}}>
+                <BufferEditor label="このタスクの前に" buffers={t.bufferBefore} onChange={v=>setT(p=>({...p,bufferBefore:v}))}/>
+                <div style={{borderTop:"1px solid #f0f0f5",paddingTop:"12px"}}>
+                  <BufferEditor label="このタスクの後に" buffers={t.bufferAfter} onChange={v=>setT(p=>({...p,bufferAfter:v}))}/>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="flex gap-2 mt-6">
+          <button onClick={onClose} className="flex-1 py-3 rounded-xl text-sm" style={{border:"1px solid #e2e2e8",color:"#9898a8"}}>キャンセル</button>
+          <button onClick={()=>onSave(t)} disabled={!t.title}
+            className="flex-1 py-3 rounded-xl text-sm font-semibold disabled:opacity-30"
+            style={{backgroundColor:"#5a4fcf",color:"white"}}>保存</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CatManageModal({ categories, onClose, onDelete, onAdd }) {
+  const [showAdd,setShowAdd]=useState(false);
+  const [nc,setNc]=useState({label:"",emoji:"🎯",...COLOR_OPT[0]});
+  return (
+    <div className="fixed inset-0 flex items-center justify-center z-50 p-4 overflow-y-auto"
+      style={{backgroundColor:"rgba(0,0,0,0.4)",backdropFilter:"blur(4px)"}}>
+      <div className="rounded-2xl p-6 w-full max-w-sm shadow-2xl my-4 bg-white" style={{border:"1px solid #e8e8f0"}}>
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-bold text-gray-800 text-base">カテゴリを管理</h3>
+          <button onClick={()=>setShowAdd(v=>!v)} className="text-sm font-semibold px-4 py-2 rounded-xl"
+            style={{color:"#5a4fcf",border:"1px solid #c4b5fd"}}>＋ 追加</button>
+        </div>
+        {showAdd&&(
+          <div className="mb-4 p-4 rounded-xl space-y-4" style={{backgroundColor:"#fafafa",border:"1px solid #e8e8f0"}}>
+            <input className="w-full rounded-xl px-4 py-3 text-sm focus:outline-none" style={{border:"1px solid #e2e2e8"}}
+              value={nc.label} onChange={e=>setNc(p=>({...p,label:e.target.value}))} placeholder="カテゴリ名"/>
+            <div className="flex flex-wrap gap-1.5">
+              {EMOJI_OPT.map(em=>(
+                <button key={em} onClick={()=>setNc(p=>({...p,emoji:em}))}
+                  style={{backgroundColor:nc.emoji===em?"#ede9fe":"transparent",border:"1px solid #e2e2e8"}}
+                  className="w-9 h-9 rounded-xl text-lg">{em}</button>
+              ))}
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              {COLOR_OPT.map((c,i)=>(
+                <button key={i} onClick={()=>setNc(p=>({...p,bg:c.bg,text:c.text,border:c.border}))}
+                  style={{backgroundColor:c.bg,borderColor:nc.bg===c.bg?c.text:c.border,color:c.text,border:"2px solid"}}
+                  className="py-2 rounded-xl text-xs font-medium">{c.label}</button>
+              ))}
+            </div>
+            <button onClick={()=>{if(!nc.label)return;onAdd({id:`cat_${Date.now()}`,...nc});setNc({label:"",emoji:"🎯",...COLOR_OPT[0]});setShowAdd(false);}}
+              disabled={!nc.label} className="w-full py-3 rounded-xl text-sm font-semibold disabled:opacity-30"
+              style={{backgroundColor:"#5a4fcf",color:"white"}}>追加する</button>
+          </div>
+        )}
+        <div className="space-y-2 mb-6">
+          {categories.map(c=>(
+            <div key={c.id} style={{backgroundColor:c.bg,borderColor:c.border,border:"1px solid"}}
+              className="flex items-center gap-3 px-4 py-3 rounded-xl">
+              <span className="text-xl">{c.emoji}</span>
+              <span style={{color:c.text}} className="text-sm font-semibold flex-1">{c.label}</span>
+              {!DEFAULT_CATS.find(d=>d.id===c.id)&&(
+                <button onClick={()=>onDelete(c.id)} className="px-2 py-1 text-gray-400 hover:text-red-400">🗑️</button>
+              )}
+            </div>
+          ))}
+        </div>
+        <button onClick={onClose} className="w-full py-3 rounded-xl text-sm" style={{border:"1px solid #e2e2e8",color:"#9898a8"}}>閉じる</button>
+      </div>
+    </div>
+  );
+}
+
+function TaskCard({ task, categories, onEdit, onDelete }) {
+  const [hE,setHE]=useState(false),[hD,setHD]=useState(false);
+  const cat=categories.find(c=>c.id===task.category)||categories[categories.length-1];
+  const dayOpt=dayMap[task.day]||dayMap.both;
+  const bb=task.bufferBefore||[],ba=task.bufferAfter||[];
+  const totalBuf=[...bb,...ba].reduce((s,b)=>s+b.mins,0);
+  return (
+    <div style={{backgroundColor:cat.bg,borderColor:cat.border}} className="flex items-center gap-3 px-4 py-3 rounded-2xl border group">
+      <span className="text-2xl shrink-0">{cat.emoji}</span>
+      <div className="flex-1 min-w-0">
+        <div style={{color:cat.text}} className="text-sm font-semibold truncate">{task.title}</div>
+        <div style={{color:cat.text}} className="text-xs mt-0.5 opacity-70 flex items-center gap-1 flex-wrap">
+          <span>{fmtDur(task.duration)}</span><span>·</span><span>{dayOpt.short}</span>
+          {task.fixedTime&&task.time&&<><span>·</span><span>{task.time}〜</span></>}
+          {totalBuf>0&&<span className="px-1.5 py-0.5 rounded-md text-xs font-medium" style={{backgroundColor:"rgba(90,79,207,0.1)",color:"#5a4fcf"}}>+{fmtDur(totalBuf)}バッファ</span>}
+        </div>
+      </div>
+      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition shrink-0">
+        <button onClick={onEdit} {...hp(setHE)} style={{backgroundColor:hE?"#f5f3ff":"transparent"}} className="px-2 py-1.5 rounded-lg text-base">✏️</button>
+        <button onClick={onDelete} {...hp(setHD)} style={{backgroundColor:hD?"#fef2f2":"transparent"}} className="px-2 py-1.5 rounded-lg text-base">🗑️</button>
+      </div>
+    </div>
+  );
+}
+
+function StartTimeSettings({ startTimes, onChange }) {
+  return (
+    <div className="rounded-2xl px-4 py-4 mb-4" style={{backgroundColor:"#f8f7ff",border:"1px solid #e8e6ff"}}>
+      <p className="text-sm font-semibold mb-3" style={{color:"#1a1a2e"}}>⏰ 1日の開始時間</p>
+      <div className="flex gap-3">
+        {[{key:"sat",label:fmt(sat)},{key:"sun",label:fmt(sun)}].map(({key,label})=>(
+          <div key={key} className="flex-1">
+            <label className="block text-xs mb-1.5" style={{color:"#9898a8"}}>{label}</label>
+            <select className="w-full rounded-xl px-3 py-2.5 text-sm focus:outline-none font-medium"
+              style={{border:"1px solid #ddd6fe",backgroundColor:"white",color:"#1a1a2e"}}
+              value={startTimes[key]} onChange={e=>onChange({...startTimes,[key]:e.target.value})}>
+              {TIME_SLOTS.map(s=><option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function NotificationPanel({ permStatus, onRequestPerm, onTest, notifEnabled, setNotifEnabled, nextFriday }) {
+  const isGranted=permStatus==="granted", isDenied=permStatus==="denied";
+  if (permStatus==="unsupported") return (
+    <div className="rounded-2xl px-4 py-3 mb-4 text-sm" style={{backgroundColor:"#fef2f2",border:"1px solid #fecaca",color:"#dc2626"}}>
+      ⚠️ このブラウザはWeb通知に対応していません。
+    </div>
+  );
+  if (isDenied) return (
+    <div className="rounded-2xl px-4 py-4 mb-4" style={{backgroundColor:"#fef2f2",border:"1px solid #fecaca"}}>
+      <p className="text-sm font-semibold mb-1" style={{color:"#dc2626"}}>🔕 通知がブロックされています</p>
+      <p className="text-xs" style={{color:"#9898a8"}}>ブラウザの🔒 → 通知 → 「許可」に変更して再読み込みしてください。</p>
+    </div>
+  );
+  if (!isGranted) return (
+    <div className="rounded-2xl px-4 py-4 mb-4" style={{backgroundColor:"#fffbeb",border:"1px solid #fde68a"}}>
+      <p className="text-sm font-semibold mb-1" style={{color:"#92400e"}}>🔔 通知を有効にする</p>
+      <p className="text-xs mb-3" style={{color:"#9898a8"}}>毎週金曜18:00に「プランを組む時間です！」と通知が届きます。</p>
+      <button onClick={onRequestPerm} className="w-full py-2.5 rounded-xl text-sm font-semibold"
+        style={{backgroundColor:"#f59e0b",color:"white"}}>通知を許可する</button>
+    </div>
+  );
+  return (
+    <div className="rounded-2xl px-4 py-4 mb-4" style={{backgroundColor:"#f0fdf4",border:"1px solid #bbf7d0"}}>
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <span className="text-lg">🔔</span>
+          <div>
+            <p className="text-sm font-semibold" style={{color:"#15803d"}}>通知ON</p>
+            {nextFriday&&<p className="text-xs" style={{color:"#9898a8"}}>次回: {nextFriday.toLocaleDateString("ja-JP",{month:"long",day:"numeric",weekday:"short"})} 18:00</p>}
+          </div>
+        </div>
+        <button onClick={()=>setNotifEnabled(v=>!v)}
+          style={{width:48,height:28,borderRadius:14,padding:3,backgroundColor:notifEnabled?"#15803d":"#d1d5db",
+            display:"flex",alignItems:"center",justifyContent:notifEnabled?"flex-end":"flex-start",border:"none",cursor:"pointer"}}>
+          <span style={{width:22,height:22,borderRadius:"50%",backgroundColor:"white",boxShadow:"0 1px 3px rgba(0,0,0,0.2)",display:"block"}}/>
+        </button>
+      </div>
+      {notifEnabled
+        ? <button onClick={onTest} className="w-full py-2 rounded-xl text-xs font-medium mt-1"
+            style={{backgroundColor:"white",border:"1px solid #bbf7d0",color:"#15803d"}}>テスト通知を送る</button>
+        : <p className="text-xs" style={{color:"#9898a8"}}>通知がオフになっています</p>
+      }
+    </div>
+  );
+}
+
+function EventEditModal({ ev, categories, onSave, onDelete, onClose }) {
+  const [t,setT]=useState({...ev});
+  return (
+    <div className="fixed inset-0 flex items-center justify-center z-50 p-4"
+      style={{backgroundColor:"rgba(0,0,0,0.5)",backdropFilter:"blur(4px)"}}>
+      <div className="rounded-2xl p-5 w-full max-w-xs shadow-2xl bg-white" style={{border:"1px solid #e8e8f0"}}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold text-base" style={{color:"#1a1a2e"}}>イベントを編集</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg leading-none">✕</button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs mb-1" style={{color:"#9898a8"}}>タイトル</label>
+            <input className="w-full rounded-xl px-3 py-2.5 text-sm focus:outline-none"
+              style={{border:"1px solid #e2e2e8",backgroundColor:"#fafafa"}}
+              value={t.title} onChange={e=>setT(p=>({...p,title:e.target.value}))}/>
+          </div>
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <label className="block text-xs mb-1" style={{color:"#9898a8"}}>開始</label>
+              <input type="time" className="w-full rounded-xl px-3 py-2.5 text-sm focus:outline-none"
+                style={{border:"1px solid #e2e2e8"}} value={t.time} onChange={e=>setT(p=>({...p,time:e.target.value}))}/>
+            </div>
+            <div className="flex-1">
+              <label className="block text-xs mb-1" style={{color:"#9898a8"}}>終了</label>
+              <input type="time" className="w-full rounded-xl px-3 py-2.5 text-sm focus:outline-none"
+                style={{border:"1px solid #e2e2e8"}} value={t.end_time} onChange={e=>setT(p=>({...p,end_time:e.target.value}))}/>
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs mb-1" style={{color:"#9898a8"}}>カテゴリ</label>
+            <div className="grid grid-cols-3 gap-1.5">
+              {categories.map(c=>(
+                <button key={c.id} onClick={()=>setT(p=>({...p,category:c.id}))}
+                  className="py-2 rounded-xl text-xs font-medium border transition"
+                  style={{backgroundColor:t.category===c.id?c.bg:"transparent",
+                    borderColor:t.category===c.id?c.border:"#e2e2e8",
+                    color:t.category===c.id?c.text:"#9898a8"}}>
+                  {c.emoji} {c.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="flex gap-2 mt-5">
+          <button onClick={()=>onDelete(ev.id)} className="px-4 py-2.5 rounded-xl text-sm font-medium"
+            style={{backgroundColor:"#fef2f2",color:"#ef4444",border:"1px solid #fecaca"}}>🗑️ 削除</button>
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl text-sm"
+            style={{border:"1px solid #e2e2e8",color:"#9898a8"}}>キャンセル</button>
+          <button onClick={()=>onSave(t)} disabled={!t.title}
+            className="flex-1 py-2.5 rounded-xl text-sm font-semibold disabled:opacity-30"
+            style={{backgroundColor:"#5a4fcf",color:"white"}}>保存</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DayColumn({ dayKey, dayLabel, events, categories, onDelete, onUpdate, onAdd, onTimeChange }) {
+  const colRef=useRef(null);
+  const dragState=useRef(null);
+  const [editingEv,setEditingEv]=useState(null);
+
+  function startDrag(e,ev,mode) {
+    e.preventDefault(); e.stopPropagation();
+    const clientY=e.touches?e.touches[0].clientY:e.clientY;
+    const origSlot=toSlot(ev.time);
+    const durSlots=Math.max(toSlot(ev.end_time)-origSlot,1);
+    dragState.current={id:ev.id,startY:clientY,origSlot,durSlots,mode};
+    function onMove(me) {
+      const cy=me.touches?me.touches[0].clientY:me.clientY;
+      const delta=Math.round((cy-dragState.current.startY)/SLOT_H);
+      const {id,origSlot,durSlots,mode}=dragState.current;
+      if (mode==='move') {
+        const newSlot=Math.max(0,Math.min(29-durSlots,origSlot+delta));
+        onTimeChange(dayKey,id,slotToTime(newSlot),slotToTime(newSlot+durSlots));
+      } else {
+        const newDur=Math.max(1,Math.min(30-origSlot,durSlots+delta));
+        onTimeChange(dayKey,id,slotToTime(origSlot),slotToTime(origSlot+newDur));
+      }
+    }
+    function onEnd() {
+      dragState.current=null;
+      window.removeEventListener('mousemove',onMove);
+      window.removeEventListener('mouseup',onEnd);
+      window.removeEventListener('touchmove',onMove);
+      window.removeEventListener('touchend',onEnd);
+    }
+    window.addEventListener('mousemove',onMove);
+    window.addEventListener('mouseup',onEnd);
+    window.addEventListener('touchmove',onMove,{passive:false});
+    window.addEventListener('touchend',onEnd);
+  }
+
+  return (
+    <div className="flex-1 min-w-0">
+      {editingEv&&(
+        <EventEditModal ev={editingEv} categories={categories}
+          onClose={()=>setEditingEv(null)}
+          onDelete={(id)=>{onDelete(dayKey,id);setEditingEv(null);}}
+          onSave={(updated)=>{onUpdate(dayKey,updated);setEditingEv(null);}}/>
+      )}
+      <div className="flex items-center justify-between mb-3 px-1">
+        <h2 className="font-bold text-sm" style={{color:"#1a1a2e"}}>{dayLabel}</h2>
+        <button onClick={onAdd} className="text-xs font-medium px-3 py-1 rounded-lg"
+          style={{color:"#5a4fcf",border:"1px solid #c4b5fd"}}>＋ 追加</button>
+      </div>
+      <div ref={colRef} className="relative" style={{height:`${SLOT_H*30}px`}}>
+        {HOURS.map(h=>(
+          <div key={h} style={{position:"absolute",top:`${(h-7)*SLOT_H*2}px`,left:0,right:0,borderTop:"1px solid #f0f0f5"}}/>
+        ))}
+        {events.map(ev=>{
+          const cat=categories.find(c=>c.id===ev.category)||categories[categories.length-1];
+          const top=toSlot(ev.time)*SLOT_H;
+          const durSlots=Math.max(toSlot(ev.end_time)-toSlot(ev.time),1);
+          const h=durSlots*SLOT_H;
+          return (
+            <div key={ev.id}
+              style={{position:"absolute",top:`${top}px`,left:"4px",right:"4px",height:`${h-2}px`,zIndex:10,
+                backgroundColor:cat.bg,border:`1.5px solid ${cat.border}`,borderRadius:12,userSelect:"none",
+                boxShadow:"0 1px 4px rgba(0,0,0,0.08)"}}
+              className="overflow-hidden">
+              <div onMouseDown={e=>startDrag(e,ev,'move')} onTouchStart={e=>startDrag(e,ev,'move')}
+                onClick={()=>setEditingEv(ev)}
+                style={{position:"absolute",top:0,left:0,right:0,bottom:14,cursor:"grab",padding:"6px 10px 2px"}}>
+                <div style={{color:cat.text}} className="text-xs font-bold leading-snug truncate">{cat.emoji} {ev.title}</div>
+                {h>SLOT_H&&<div style={{color:cat.text}} className="text-xs opacity-60 mt-0.5">{ev.time}〜{ev.end_time}</div>}
+              </div>
+              <div onMouseDown={e=>{e.stopPropagation();startDrag(e,ev,'resize');}}
+                onTouchStart={e=>{e.stopPropagation();startDrag(e,ev,'resize');}}
+                style={{position:"absolute",bottom:0,left:0,right:0,height:14,cursor:"ns-resize",
+                  display:"flex",alignItems:"center",justifyContent:"center",gap:3}}>
+                <div style={{width:18,height:3,borderRadius:2,backgroundColor:cat.border}}/>
+                <div style={{width:10,height:3,borderRadius:2,backgroundColor:cat.border,opacity:0.5}}/>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [categories,  setCategories]  = useState(()=>loadJSON(SK.categories,DEFAULT_CATS));
+  const [fixedTasks,  setFixedTasks]  = useState(()=>loadJSON(SK.fixedTasks,DEFAULT_FIXED));
+  const [weekTasks,   setWeekTasks]   = useState(()=>{
+    const saved=loadJSON(SK.weekKey,null);
+    if(saved!==fmtISO(sat)){saveJSON(SK.weekKey,fmtISO(sat));saveJSON(SK.weekTasks,[]);return [];}
+    return loadJSON(SK.weekTasks,[]);
+  });
+  const [startTimes,  setStartTimes]  = useState(()=>loadJSON(SK.startTimes,{sat:"08:00",sun:"09:00"}));
+  const [notifEnabled,setNotifEnabled]= useState(()=>loadJSON(SK.notif,true));
+  const [permStatus,  setPermStatus]  = useState(getPermissionStatus);
+  const [nextFriday,  setNextFriday]  = useState(null);
+  const [isFriday18,  setIsFriday18]  = useState(false);
+  const [step,        setStep]        = useState("input");
+  const [satEvents,   setSatEvents]   = useState([]);
+  const [sunEvents,   setSunEvents]   = useState([]);
+  const [loading,     setLoading]     = useState("");
+  const [error,       setError]       = useState("");
+  const [saving,      setSaving]      = useState(false);
+  const [saved,       setSaved]       = useState(false);
+  const [weekComment, setWeekComment] = useState("");
+  const [modal,       setModal]       = useState(null);
+  const [catModal,    setCatModal]    = useState(false);
+  const [addEvModal,  setAddEvModal]  = useState(null);
+  const [newEv,       setNewEv]       = useState({title:"",category:"chores",time:"10:00",end_time:"11:00"});
+  const timerHandle=useRef(null);
+
+  useEffect(()=>{saveJSON(SK.categories,categories);},[categories]);
+  useEffect(()=>{saveJSON(SK.fixedTasks,fixedTasks);},[fixedTasks]);
+  useEffect(()=>{saveJSON(SK.weekTasks,weekTasks);},[weekTasks]);
+  useEffect(()=>{saveJSON(SK.startTimes,startTimes);},[startTimes]);
+  useEffect(()=>{saveJSON(SK.notif,notifEnabled);},[notifEnabled]);
+
+  useEffect(()=>{
+    if(timerHandle.current) clearTimeout(timerHandle.current);
+    if(permStatus==="granted"&&notifEnabled) timerHandle.current=scheduleFridayNotif(setNextFriday);
+    else setNextFriday(null);
+    return ()=>{if(timerHandle.current)clearTimeout(timerHandle.current);};
+  },[permStatus,notifEnabled]);
+
+  useEffect(()=>{
+    const check=()=>{const n=new Date();setIsFriday18(n.getDay()===5&&n.getHours()===18);};
+    check(); const id=setInterval(check,60000); return ()=>clearInterval(id);
+  },[]);
+
+  async function handleRequestPerm(){setPermStatus(await requestPermission());}
+
+  const onTimeChange=useCallback((day,id,newTime,newEnd)=>{
+    (day==="sat"?setSatEvents:setSunEvents)(prev=>prev.map(e=>e.id===id?{...e,time:newTime,end_time:newEnd}:e));
+  },[]);
+  const onUpdate=useCallback((day,updated)=>{
+    (day==="sat"?setSatEvents:setSunEvents)(prev=>prev.map(e=>e.id===updated.id?updated:e));
+  },[]);
+  const deleteEvent=useCallback((day,id)=>{
+    (day==="sat"?setSatEvents:setSunEvents)(prev=>prev.filter(e=>e.id!==id));
+  },[]);
+
+  function addCalEvent(day) {
+    const ev={...newEv,id:mkId()};
+    (day==="sat"?setSatEvents:setSunEvents)(prev=>[...prev,ev].sort((a,b)=>a.time.localeCompare(b.time)));
+    setAddEvModal(null);
+    setNewEv({title:"",category:"chores",time:"10:00",end_time:"11:00"});
+  }
+
+  async function callAPI(messages,mcpServers,maxTokens=1000){
+    const body={model:"claude-sonnet-4-20250514",max_tokens:maxTokens,messages};
+    if(mcpServers) body.mcp_servers=mcpServers;
+    const res=await fetch("https://api.anthropic.com/v1/messages",{
+      method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    return res.json();
+  }
+
+  function buildTaskLines(tasks,dayKey){
+    const lines=[];
+    tasks.filter(t=>dayKey==="sat"?t.day!=="sun":t.day!=="sat").forEach(t=>{
+      const timeNote=t.fixedTime&&t.time?`、開始時間固定:${t.time}`:"";
+      (t.bufferBefore||[]).forEach(b=>lines.push(`  - ${b.label}（${b.mins}分）※「${t.title}」の直前`));
+      lines.push(`  - 【メイン】${t.title}（${t.duration}分、カテゴリ:${t.category}${timeNote}）`);
+      (t.bufferAfter||[]).forEach(b=>lines.push(`  - ${b.label}（${b.mins}分）※「${t.title}」の直後`));
+    });
+    return lines;
+  }
+
+  async function generate(){
+    setStep("loading"); setError("");
+    try {
+      setLoading("📅 今週のカレンダーを確認中...");
+      const calRes=await callAPI(
+        [{role:"user",content:`今週(${fmtISO(today)}〜${fmtISO(sat)})のGoogleカレンダーの予定と忙しさのサマリーを教えてください。`}],
+        [{type:"url",url:GCAL_MCP_URL,name:"gcal"}]
+      );
+      const calSummary=(calRes.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n")
+        +(calRes.content||[]).filter(b=>b.type==="mcp_tool_result").map(b=>b.content?.[0]?.text||"").join("\n");
+      setLoading("🤖 スケジュールを組み立て中...");
+      const all=[...fixedTasks,...weekTasks];
+      const satLines=buildTaskLines(all,"sat");
+      const sunLines=buildTaskLines(all,"sun");
+      const prompt=`あなたは優秀なライフプランナーです。以下のルールを厳守してJSONを返してください。
+## 絶対ルール
+1. 土曜タスクは全件 saturday に、日曜タスクは全件 sunday に配置。漏れは許されない。
+2. タスクは隙間なく連続して並べる。朝食・昼食など記載のないものは追加しない。
+3. バッファは【メイン】タスクの直前・直後に配置。
+4. 開始時間固定の指定はその時間通りに配置する。
+5. 土曜の開始は ${startTimes.sat}、日曜の開始は ${startTimes.sun}。
+6. 終了は最大 22:00 まで。
+7. 同じカテゴリのタスクは連続した時間帯にまとめて配置する。
+8. 疲労が多い週は日曜夕方以降をゆったり気味に。
+## 今週の疲労・予定
+${calSummary}
+## 土曜タスク（全${satLines.length}件・全件必須）
+${satLines.join("\n")||"  （なし）"}
+## 日曜タスク（全${sunLines.length}件・全件必須）
+${sunLines.join("\n")||"  （なし）"}
+## 出力形式（JSONのみ・コードブロック不要）
+{"week_comment":"","saturday":[{"title":"","category":"","time":"HH:MM","end_time":"HH:MM"}],"sunday":[]}`;
+      const planRes=await callAPI([{role:"user",content:prompt}],null,4000);
+      const raw=(planRes.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+      const parsed=JSON.parse(raw.replace(/```json|```/g,"").trim());
+      setWeekComment(parsed.week_comment||"");
+      setSatEvents((parsed.saturday||[]).map(e=>({...e,id:mkId()})));
+      setSunEvents((parsed.sunday||[]).map(e=>({...e,id:mkId()})));
+      setStep("plan");
+    } catch(e){setError("エラー: "+e.message);setStep("input");}
+  }
+
+  async function saveToCalendar(){
+    setSaving(true); setError("");
+    try {
+      const all=[...satEvents.map(e=>({...e,date:fmtISO(sat)})),...sunEvents.map(e=>({...e,date:fmtISO(sun)}))];
+      const eventLines=all.map(e=>`・「${e.title}」 ${e.date} ${e.time}〜${e.end_time}`).join("\n");
+      await callAPI(
+        [{role:"user",content:`Googleカレンダーに以下の操作をしてください（タイムゾーン: Asia/Tokyo）。
+手順:
+1. ${fmtISO(sat)} と ${fmtISO(sun)} の既存イベントをすべて削除する
+2. 以下のイベントを1件ずつ新規作成する
+イベント一覧:
+${eventLines}`}],
+        [{type:"url",url:GCAL_MCP_URL,name:"gcal"}],4000
+      );
+      setSaved(true); setWeekTasks([]);
+    } catch(e){setError("保存エラー: "+e.message);}
+    setSaving(false);
+  }
+
+  const SECTIONS=[
+    {key:"fixed",label:"📌 固定タスク",  sub:"毎週繰り越して使えます",tasks:fixedTasks,setTasks:setFixedTasks},
+    {key:"week", label:"✨ 今週のタスク",sub:"来週金曜に自動リセット", tasks:weekTasks, setTasks:setWeekTasks},
+  ];
+
+  if(step==="loading") return (
+    <div className="min-h-screen flex items-center justify-center" style={{backgroundColor:"#f5f5fa"}}>
+      <div className="text-center">
+        <div className="text-6xl mb-5" style={{animation:"bounce 1s infinite"}}>🗓️</div>
+        <p className="font-semibold text-base" style={{color:"#1a1a2e"}}>{loading}</p>
+        <p className="text-sm mt-1" style={{color:"#9898a8"}}>少々お待ちください...</p>
+        <style>{`@keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-12px)}}`}</style>
+      </div>
+    </div>
+  );
+
+  if(step==="plan") return (
+    <div className="min-h-screen p-3" style={{backgroundColor:"#f5f5fa"}}>
+      <div className="max-w-3xl mx-auto rounded-2xl shadow-sm p-5" style={{backgroundColor:"white",border:"1px solid #e8e8f0"}}>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h1 className="font-bold text-lg" style={{color:"#1a1a2e"}}>今週末のプラン</h1>
+            <p className="text-sm mt-0.5" style={{color:"#9898a8"}}>{fmt(sat)} 〜 {fmt(sun)}</p>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={()=>{setStep("input");setSaved(false);}} className="text-sm px-4 py-2 rounded-xl"
+              style={{border:"1px solid #e2e2e8",color:"#9898a8"}}>組み直す</button>
+            {saved
+              ? <div className="text-sm px-4 py-2 rounded-xl font-semibold"
+                  style={{backgroundColor:"#f0fdf4",border:"1px solid #bbf7d0",color:"#15803d"}}>✓ 登録済み</div>
+              : <button onClick={saveToCalendar} disabled={saving}
+                  className="text-sm px-4 py-2 rounded-xl font-semibold disabled:opacity-40"
+                  style={{backgroundColor:"#5a4fcf",color:"white"}}>
+                  {saving?"登録中...":"📅 カレンダーに登録"}
+                </button>
+            }
+          </div>
+        </div>
+        {weekComment&&(
+          <div className="px-4 py-3 rounded-xl mb-4 text-sm"
+            style={{backgroundColor:"#fefce8",border:"1px solid #fde68a",color:"#92400e"}}>
+            💬 {weekComment}
+          </div>
+        )}
+        <p className="text-xs mb-3" style={{color:"#c0c0cc"}}>イベントをタップ → 編集・削除　下端をドラッグ → 時間調整</p>
+        <div className="flex gap-3 overflow-x-auto">
+          <div className="shrink-0 w-10 pt-9">
+            {HOURS.map(h=>(
+              <div key={h} style={{height:`${SLOT_H*2}px`,color:"#c0c0cc"}} className="text-xs -mt-2 leading-none">{h}:00</div>
+            ))}
+          </div>
+          <DayColumn dayKey="sat" dayLabel={fmt(sat)} events={satEvents} categories={categories}
+            onDelete={deleteEvent} onUpdate={onUpdate} onAdd={()=>setAddEvModal("sat")} onTimeChange={onTimeChange}/>
+          <DayColumn dayKey="sun" dayLabel={fmt(sun)} events={sunEvents} categories={categories}
+            onDelete={deleteEvent} onUpdate={onUpdate} onAdd={()=>setAddEvModal("sun")} onTimeChange={onTimeChange}/>
+        </div>
+        {error&&<p className="text-sm mt-2" style={{color:"#ef4444"}}>{error}</p>}
+      </div>
+      {addEvModal&&(
+        <div className="fixed inset-0 flex items-center justify-center z-50 p-4"
+          style={{backgroundColor:"rgba(0,0,0,0.4)",backdropFilter:"blur(4px)"}}>
+          <div className="rounded-2xl p-6 w-full max-w-sm shadow-2xl bg-white" style={{border:"1px solid #e8e8f0"}}>
+            <h3 className="font-bold text-base mb-5">イベントを追加</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm mb-2" style={{color:"#9898a8"}}>タイトル</label>
+                <input className="w-full rounded-xl px-4 py-3 text-sm focus:outline-none"
+                  style={{border:"1px solid #e2e2e8",backgroundColor:"#fafafa"}}
+                  value={newEv.title} onChange={e=>setNewEv(p=>({...p,title:e.target.value}))} placeholder="例：朝ラン"/>
+              </div>
+              <div className="flex gap-2">
+                {[{k:"time",l:"開始"},{k:"end_time",l:"終了"}].map(({k,l})=>(
+                  <div key={k} className="flex-1">
+                    <label className="block text-sm mb-2" style={{color:"#9898a8"}}>{l}</label>
+                    <input type="time" className="w-full rounded-xl px-3 py-3 text-sm focus:outline-none" style={{border:"1px solid #e2e2e8"}}
+                      value={newEv[k]} onChange={e=>setNewEv(p=>({...p,[k]:e.target.value}))}/>
+                  </div>
+                ))}
+              </div>
+              <div>
+                <label className="block text-sm mb-2" style={{color:"#9898a8"}}>カテゴリ</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {categories.map(c=>(
+                    <HovBtn key={c.id} onClick={()=>setNewEv(p=>({...p,category:c.id}))}
+                      active={newEv.category===c.id} activeBg={c.bg} activeBorder={c.border} activeText={c.text}>
+                      {c.emoji} {c.label}
+                    </HovBtn>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-2 mt-6">
+              <button onClick={()=>setAddEvModal(null)} className="flex-1 py-3 rounded-xl text-sm"
+                style={{border:"1px solid #e2e2e8",color:"#9898a8"}}>キャンセル</button>
+              <button onClick={()=>addCalEvent(addEvModal)} disabled={!newEv.title}
+                className="flex-1 py-3 rounded-xl text-sm font-semibold disabled:opacity-30"
+                style={{backgroundColor:"#5a4fcf",color:"white"}}>追加</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen p-4" style={{backgroundColor:"#f5f5fa"}}>
+      <div className="max-w-lg mx-auto">
+        <div className="rounded-2xl shadow-sm p-6" style={{backgroundColor:"white",border:"1px solid #e8e8f0"}}>
+          <div className="text-center mb-6">
+            <div className="text-5xl mb-3">🗓️</div>
+            <h1 className="text-2xl font-bold" style={{color:"#1a1a2e",letterSpacing:"-0.5px"}}>週末プランナー</h1>
+            <p className="text-sm mt-1" style={{color:"#9898a8"}}>{fmt(sat)} 〜 {fmt(sun)}</p>
+            <button onClick={()=>setCatModal(true)} className="mt-3 text-xs font-semibold px-3 py-1.5 rounded-xl"
+              style={{color:"#5a4fcf",border:"1px solid #c4b5fd",backgroundColor:"transparent"}}>カテゴリを管理</button>
+          </div>
+          {isFriday18&&(
+            <div style={{background:"linear-gradient(135deg,#1a1a2e 0%,#2d2b55 100%)",borderRadius:16,padding:"16px 20px"}}
+              className="flex items-center gap-3 mb-5">
+              <span className="text-2xl">🔔</span>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-white">今週末のスケジュールを組む時間です！</p>
+                <p className="text-xs mt-0.5" style={{color:"#a0a0c8"}}>金曜18:00 · タスクを確認して生成しましょう</p>
+              </div>
+              <button onClick={()=>setIsFriday18(false)} style={{color:"#a0a0c8"}} className="text-xs px-2 py-2 rounded-xl">✕</button>
+            </div>
+          )}
+          <NotificationPanel permStatus={permStatus} onRequestPerm={handleRequestPerm}
+            onTest={fireTestNotification} notifEnabled={notifEnabled}
+            setNotifEnabled={setNotifEnabled} nextFriday={nextFriday}/>
+          <StartTimeSettings startTimes={startTimes} onChange={setStartTimes}/>
+          <div style={{backgroundColor:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:12}} className="flex items-center gap-2 px-3 py-2 mb-5">
+            <span className="text-sm">♻️</span>
+            <span className="text-xs font-medium" style={{color:"#1d4ed8"}}>今週タスクは毎週金曜に自動リセット</span>
+          </div>
+          {SECTIONS.map(({key,label,sub,tasks,setTasks},si)=>(
+            <div key={key} className={si===1?"mt-6 pt-6":""} style={si===1?{borderTop:"1px solid #f0f0f5"}:{}}>
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h2 className="font-bold text-base" style={{color:"#1a1a2e"}}>{label}</h2>
+                  <p className="text-xs mt-0.5" style={{color:"#b0b0c0"}}>{sub}</p>
+                </div>
+                <button onClick={()=>setModal({type:key,data:null})} className="text-sm font-semibold px-4 py-2 rounded-xl"
+                  style={{color:"#5a4fcf",border:"1px solid #c4b5fd",backgroundColor:"transparent"}}>＋ 追加</button>
+              </div>
+              <div className="space-y-2">
+                {tasks.map(t=>(
+                  <TaskCard key={t.id} task={t} categories={categories}
+                    onEdit={()=>setModal({type:key,data:t})}
+                    onDelete={()=>setTasks(p=>p.filter(x=>x.id!==t.id))}/>
+                ))}
+                {tasks.length===0&&(
+                  <p className="text-sm text-center py-5" style={{color:"#d0d0dc"}}>
+                    {key==="fixed"?"固定タスクなし":"今週のタスクを追加してみよう ✨"}
+                  </p>
+                )}
+              </div>
+            </div>
+          ))}
+          {error&&<p className="text-sm mt-4" style={{color:"#ef4444"}}>{error}</p>}
+          <button onClick={generate}
+            className="w-full py-4 mt-8 rounded-2xl font-bold text-base transition active:scale-95"
+            style={{background:"linear-gradient(135deg,#5a4fcf 0%,#7c3aed 100%)",color:"white",boxShadow:"0 4px 20px rgba(90,79,207,0.35)"}}>
+            スケジュールを組んでもらう →
+          </button>
+          <p className="text-xs text-center mt-3" style={{color:"#c0c0cc"}}>今週の疲れ具合も加味して提案します</p>
+        </div>
+      </div>
+      {catModal&&(
+        <CatManageModal categories={categories} onClose={()=>setCatModal(false)}
+          onDelete={id=>setCategories(p=>p.filter(c=>c.id!==id))}
+          onAdd={c=>setCategories(p=>[...p,c])}/>
+      )}
+      {modal&&(
+        <TaskModal
+          title={modal.type==="fixed"?(modal.data?"固定タスクを編集":"固定タスクを追加"):(modal.data?"今週タスクを編集":"今週タスクを追加")}
+          initial={modal.data} categories={categories}
+          onClose={()=>setModal(null)}
+          onSave={t=>{
+            const setter=modal.type==="fixed"?setFixedTasks:setWeekTasks;
+            if(modal.data) setter(p=>p.map(x=>x.id===modal.data.id?{...t,id:x.id}:x));
+            else setter(p=>[...p,{...t,id:mkId()}]);
+            setModal(null);
+          }}/>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
