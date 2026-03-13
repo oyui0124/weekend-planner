@@ -220,21 +220,38 @@ function BufferEditor({ label, buffers, onChange }) {
   const [adding,setAdding]=useState(false);
   const [newLabel,setNewLabel]=useState("");
   const [newMins,setNewMins]=useState(30);
+  const [editIdx,setEditIdx]=useState(-1);
   const QUICK=[{label:"移動",mins:30},{label:"メイク",mins:45},{label:"シャワー",mins:30},{label:"準備",mins:30},{label:"移動（近め）",mins:15}];
+  const MINS_OPTIONS=[10,15,20,30,45,60,90,120];
   return (
     <div>
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex items-center justify-between mb-1">
         <span className="text-xs font-medium" style={{color:"#9898a8"}}>{label}</span>
         {buffers.length>0&&<span className="text-xs font-semibold" style={{color:"#5a4fcf"}}>計{buffers.reduce((s,b)=>s+b.mins,0)}分</span>}
       </div>
       {buffers.length>0&&(
-        <div className="flex flex-wrap gap-1.5 mb-2">
+        <div className="space-y-1.5 mb-2">
           {buffers.map((b,i)=>(
-            <span key={i} className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium"
-              style={{backgroundColor:"#f0eeff",color:"#5a4fcf",border:"1px solid #ddd6fe"}}>
-              {b.label}（{b.mins}分）
-              <button onClick={()=>onChange(buffers.filter((_,j)=>j!==i))} className="ml-0.5 opacity-50 hover:opacity-100 text-xs">✕</button>
-            </span>
+            <div key={i} className="flex items-center gap-2 px-3 py-2 rounded-lg"
+              style={{backgroundColor:"#f0eeff",border:"1px solid #ddd6fe"}}>
+              <span className="text-xs font-medium flex-1" style={{color:"#5a4fcf"}}>{b.label}</span>
+              {editIdx===i?(
+                <div className="flex items-center gap-1 flex-wrap">
+                  {MINS_OPTIONS.map(m=>(
+                    <button key={m} onClick={()=>{const nb=[...buffers];nb[i]={...nb[i],mins:m};onChange(nb);setEditIdx(-1);}}
+                      className="px-1.5 py-0.5 rounded text-xs"
+                      style={{backgroundColor:b.mins===m?"#5a4fcf":"white",color:b.mins===m?"white":"#5a4fcf",
+                        border:"1px solid #c4b5fd",minWidth:32}}>{m}分</button>
+                  ))}
+                </div>
+              ):(
+                <button onClick={()=>setEditIdx(i)}
+                  className="px-2 py-0.5 rounded text-xs font-semibold"
+                  style={{backgroundColor:"white",color:"#5a4fcf",border:"1px solid #c4b5fd"}}>{b.mins}分</button>
+              )}
+              <button onClick={()=>{onChange(buffers.filter((_,j)=>j!==i));if(editIdx===i)setEditIdx(-1);}}
+                className="opacity-50 hover:opacity-100 text-xs" style={{color:"#5a4fcf"}}>✕</button>
+            </div>
           ))}
         </div>
       )}
@@ -321,14 +338,18 @@ function TaskModal({ initial, onSave, onClose, title, categories }) {
             <button onClick={()=>setShowBuf(v=>!v)}
               className="w-full flex items-center justify-between px-4 py-3 text-left"
               style={{backgroundColor:showBuf?"#f8f7ff":"white"}}>
-              <span className="text-sm font-medium" style={{color:"#1a1a2e"}}>前後の準備・移動時間</span>
-              <span className="text-xs" style={{color:"#9898a8"}}>{showBuf?"▲":"▼"}</span>
+              <div>
+                <span className="text-sm font-medium" style={{color:"#1a1a2e"}}>準備・移動時間を追加</span>
+                {!showBuf&&<p className="text-xs mt-0.5" style={{color:"#b0b0c0",margin:0}}>メイク・移動などの前後の時間を設定</p>}
+              </div>
+              <span className="text-xs ml-2 shrink-0" style={{color:"#9898a8"}}>{showBuf?"▲":"▼"}</span>
             </button>
             {showBuf&&(
               <div className="px-4 pb-4 pt-3 space-y-4" style={{backgroundColor:"#fafafa",borderTop:"1px solid #f0f0f5"}}>
-                <BufferEditor label="このタスクの前に" buffers={t.bufferBefore} onChange={v=>setT(p=>({...p,bufferBefore:v}))}/>
+                <p className="text-xs" style={{color:"#b0b0c0"}}>タップで追加、分数ボタンで時間を変更できます</p>
+                <BufferEditor label="⏪ タスクの前（準備・移動など）" buffers={t.bufferBefore} onChange={v=>setT(p=>({...p,bufferBefore:v}))}/>
                 <div style={{borderTop:"1px solid #f0f0f5",paddingTop:"12px"}}>
-                  <BufferEditor label="このタスクの後に" buffers={t.bufferAfter} onChange={v=>setT(p=>({...p,bufferAfter:v}))}/>
+                  <BufferEditor label="⏩ タスクの後（片付け・シャワーなど）" buffers={t.bufferAfter} onChange={v=>setT(p=>({...p,bufferAfter:v}))}/>
                 </div>
               </div>
             )}
@@ -696,45 +717,73 @@ function App() {
     setNewEv({title:"",category:"chores",time:"10:00",end_time:"11:00"});
   }
 
-  function buildTaskLines(tasks,dayKey){
-    const lines=[];
-    tasks.filter(t=>dayKey==="sat"?t.day!=="sun":t.day!=="sat").forEach(t=>{
-      const timeNote=t.fixedTime&&t.time?`、開始時間固定:${t.time}`:"";
-      (t.bufferBefore||[]).forEach(b=>lines.push(`  - ${b.label}（${b.mins}分）※「${t.title}」の直前`));
-      lines.push(`  - 【メイン】${t.title}（${t.duration}分、カテゴリ:${t.category}${timeNote}）`);
-      (t.bufferAfter||[]).forEach(b=>lines.push(`  - ${b.label}（${b.mins}分）※「${t.title}」の直後`));
-    });
-    return lines;
-  }
-
   function simpleSchedule(tasks, startTime) {
-    const events = [];
-    let [h, m] = startTime.split(":").map(Number);
-    const catGroups = {};
-    tasks.forEach(t => {
-      if (!catGroups[t.category]) catGroups[t.category] = [];
-      catGroups[t.category].push(t);
-    });
-    const ordered = Object.values(catGroups).flat();
-    ordered.forEach(t => {
-      const allItems = [
-        ...(t.bufferBefore||[]).map(b => ({title:b.label,category:t.category,mins:b.mins})),
+    function expandTask(t, startH, startM) {
+      const items = [
+        ...(t.bufferBefore||[]).map(b => ({title:b.label, category:t.category, mins:b.mins})),
         {title:t.title, category:t.category, mins:t.duration},
-        ...(t.bufferAfter||[]).map(b => ({title:b.label,category:t.category,mins:b.mins})),
+        ...(t.bufferAfter||[]).map(b => ({title:b.label, category:t.category, mins:b.mins})),
       ];
-      allItems.forEach(item => {
-        if (t.fixedTime && t.time && item.title === t.title) {
-          [h, m] = t.time.split(":").map(Number);
-        }
-        const startStr = `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+      const evs = [];
+      let h = startH, m = startM;
+      items.forEach(item => {
+        const s = `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
         m += item.mins;
         while (m >= 60) { h++; m -= 60; }
         if (h >= 22) { h = 22; m = 0; }
-        const endStr = `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
-        events.push({id:mkId(), title:item.title, category:item.category, time:startStr, end_time:endStr});
+        const e = `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+        evs.push({id:mkId(), title:item.title, category:item.category, time:s, end_time:e});
       });
+      return { evs, endH: h, endM: m };
+    }
+
+    // 1. 固定時間タスクを先に配置
+    const fixed = tasks.filter(t => t.fixedTime && t.time).sort((a,b) => a.time.localeCompare(b.time));
+    const flex = tasks.filter(t => !t.fixedTime || !t.time);
+
+    const allEvents = [];
+    const occupied = [];
+
+    fixed.forEach(t => {
+      const [fh, fm] = t.time.split(":").map(Number);
+      const beforeMins = (t.bufferBefore||[]).reduce((s,b) => s+b.mins, 0);
+      let sh = fh, sm = fm - beforeMins;
+      while (sm < 0) { sh--; sm += 60; }
+      if (sh < 7) { sh = 7; sm = 0; }
+      const { evs, endH, endM } = expandTask(t, sh, sm);
+      allEvents.push(...evs);
+      occupied.push({ startMins: sh*60+sm, endMins: endH*60+endM });
     });
-    return events;
+    occupied.sort((a,b) => a.startMins - b.startMins);
+
+    // 2. フレキシブルタスクをカテゴリ順にまとめて配置（重ならないように）
+    const catGroups = {};
+    flex.forEach(t => {
+      if (!catGroups[t.category]) catGroups[t.category] = [];
+      catGroups[t.category].push(t);
+    });
+    const orderedFlex = Object.values(catGroups).flat();
+
+    let [curH, curM] = startTime.split(":").map(Number);
+
+    orderedFlex.forEach(t => {
+      const totalMins = (t.bufferBefore||[]).reduce((s,b)=>s+b.mins,0) + t.duration + (t.bufferAfter||[]).reduce((s,b)=>s+b.mins,0);
+      let curMins = curH * 60 + curM;
+      for (const occ of occupied) {
+        if (curMins < occ.endMins && curMins + totalMins > occ.startMins) {
+          curMins = occ.endMins;
+        }
+      }
+      const sh = Math.floor(curMins/60), sm = curMins%60;
+      const { evs, endH, endM } = expandTask(t, sh, sm);
+      allEvents.push(...evs);
+      occupied.push({ startMins: curMins, endMins: endH*60+endM });
+      occupied.sort((a,b) => a.startMins - b.startMins);
+      curH = endH; curM = endM;
+    });
+
+    allEvents.sort((a,b) => a.time.localeCompare(b.time));
+    return allEvents;
   }
 
   async function generate(){
@@ -903,6 +952,17 @@ function App() {
             onTest={fireTestNotification} notifEnabled={notifEnabled}
             setNotifEnabled={setNotifEnabled} nextFriday={nextFriday}/>
           <StartTimeSettings startTimes={startTimes} onChange={setStartTimes}/>
+          {fixedTasks.length===0&&weekTasks.length===0&&(
+            <div className="rounded-2xl px-5 py-4 mb-5" style={{background:"linear-gradient(135deg,#f8f7ff 0%,#eff6ff 100%)",border:"1px solid #e8e6ff"}}>
+              <p className="text-sm font-bold mb-2" style={{color:"#5a4fcf"}}>はじめての方へ</p>
+              <div className="text-xs leading-relaxed" style={{color:"#7c7c94"}}>
+                <p style={{margin:"0 0 6px"}}><span style={{fontWeight:600,color:"#5a4fcf"}}>1.</span> まず「固定タスク」に毎週やることを登録</p>
+                <p style={{margin:"0 0 6px"}}><span style={{fontWeight:600,color:"#5a4fcf"}}>2.</span> 「今週のタスク」にその週だけの予定を追加</p>
+                <p style={{margin:"0 0 6px"}}><span style={{fontWeight:600,color:"#5a4fcf"}}>3.</span> 下の「スケジュールを組んでもらう」で自動配置！</p>
+                <p style={{margin:0,color:"#b0b0c0"}}>※ タスク追加時「準備・移動時間」で前後のバッファも設定できます</p>
+              </div>
+            </div>
+          )}
           <div style={{backgroundColor:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:12}} className="flex items-center gap-2 px-3 py-2 mb-5">
             <span className="text-sm">♻️</span>
             <span className="text-xs font-medium" style={{color:"#1d4ed8"}}>今週タスクは毎週金曜に自動リセット</span>
@@ -925,7 +985,7 @@ function App() {
                 ))}
                 {tasks.length===0&&(
                   <p className="text-sm text-center py-5" style={{color:"#d0d0dc"}}>
-                    {key==="fixed"?"固定タスクなし":"今週のタスクを追加してみよう ✨"}
+                    {key==="fixed"?"＋ 追加 から固定タスクを登録しよう":"今週のタスクを追加してみよう"}
                   </p>
                 )}
               </div>
@@ -937,7 +997,7 @@ function App() {
             style={{background:"linear-gradient(135deg,#5a4fcf 0%,#7c3aed 100%)",color:"white",boxShadow:"0 4px 20px rgba(90,79,207,0.35)"}}>
             スケジュールを組んでもらう →
           </button>
-          <p className="text-xs text-center mt-3" style={{color:"#c0c0cc"}}>今週の疲れ具合も加味して提案します</p>
+          <p className="text-xs text-center mt-3" style={{color:"#c0c0cc"}}>タスクの順番・時間を自動で配置します</p>
         </div>
       </div>
       {catModal&&(
