@@ -811,6 +811,7 @@ function App() {
     try {
       // Googleカレンダーのタイムゾーンを取得
       setLoading("カレンダー設定を確認中...");
+      const calInfo = await gcalFetch("/calendars/primary");
       const tz = calInfo.timeZone || "Asia/Tokyo";
 
       const allEvents=[
