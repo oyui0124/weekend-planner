@@ -24,7 +24,7 @@
 // ⚙️  設定
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const GCAL_CLIENT_ID = "386754812709-a18clokvvp2f02t9diimqlfki7qv07lq.apps.googleusercontent.com";
-const GCAL_SCOPES = "https://www.googleapis.com/auth/calendar.events";
+const GCAL_SCOPES = "https://www.googleapis.com/auth/calendar";
 const GCAL_API = "https://www.googleapis.com/calendar/v3";
 
 let gAccessToken = null;
@@ -811,8 +811,7 @@ function App() {
     try {
       // Googleカレンダーのタイムゾーンを取得
       setLoading("カレンダー設定を確認中...");
-      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      alert("TZ: " + tz);
+      const tz = calInfo.timeZone || "Asia/Tokyo";
 
       const allEvents=[
         ...satEvents.map(e=>({...e,date:fmtISO(sat)})),
