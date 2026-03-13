@@ -813,6 +813,7 @@ function App() {
       setLoading("カレンダー設定を確認中...");
       const calInfo = await gcalFetch("/calendars/primary");
       const tz = calInfo.timeZone || "Asia/Tokyo";
+      alert("calInfo: " + JSON.stringify(calInfo));
 
       const allEvents=[
         ...satEvents.map(e=>({...e,date:fmtISO(sat)})),
