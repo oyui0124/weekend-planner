@@ -110,15 +110,17 @@ async function requestPermission() {
   if (Notification.permission !== "default") return Notification.permission;
   return await Notification.requestPermission();
 }
-function showNotification(title, body, tag) {
+async function showNotification(title, body, tag) {
   if (!NOTIF_SUPPORT || Notification.permission !== "granted") return;
-  // Service Worker経由で通知（GitHub Pagesでも確実に動く）
-  if (navigator.serviceWorker && navigator.serviceWorker.controller) {
-    navigator.serviceWorker.controller.postMessage({ type:"SHOW_NOTIF", title, body, tag });
+  const reg = await navigator.serviceWorker?.ready;
+  if (reg) {
+    reg.showNotification(title, {
+      body, tag,
+      icon: "https://cdn.jsdelivr.net/gh/twitter/twemoji@14/assets/svg/1f4c5.svg",
+      data: { url: "/weekend-planner/" }
+    });
   } else {
-    // フォールバック：直接Notification
-    try { new Notification(title, { body, tag, icon:"https://cdn.jsdelivr.net/gh/twitter/twemoji@14/assets/svg/1f4c5.svg" }); }
-    catch(e) { console.warn("通知エラー:", e); }
+    try { new Notification(title, { body, tag }); } catch(e) {}
   }
 }
 function fireTestNotification() {
